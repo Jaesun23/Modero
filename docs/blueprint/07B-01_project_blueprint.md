@@ -64,7 +64,7 @@ graph TD
      - *최적화*: `is_final=False`인 중간 결과는 UI 표시용으로 즉시 브로드캐스팅, `is_final=True`인 결과만 DB 저장 및 LLM 입력으로 사용.
    - **LLM (Gemini)**:
      - Trace ID를 유지하며 STT 결과를 프롬프트 템플릿에 주입.
-     - Gemini Streaming API를 호출하여 토큰 단위가 아닌 '문장/의미' 단위로 버퍼링 후 전송 (JSON 포맷 강제).
+     - **[Update] Unary Async Processing**: 실시간 대화의 맥락 파악을 위해 스트리밍 대신 `generate_content_async`를 사용하여 문장 단위로 완결된 JSON 응답을 수신 (비동기 처리로 Latency 최소화).
 3. **Broadcasting (전파)**
    - 생성된 `Transcript`와 `AiInsight`를 `ConnectionManager.broadcast(room_id, message)`를 통해 방에 있는 모든 클라이언트에게 전송.
 
@@ -92,7 +92,7 @@ graph TD
   - `title` (String): 회의 제목
   - `host_id` (UUID, FK): 방장 ID
   - `is_active` (Boolean): 회의 진행 여부 (종료 시 False)
-  - `started_at` (DateTime): 시작 시간
+  - `started_at` (DateTime, Nullable): 회의 실제 시작 시간
 - **In-Memory 매핑**: DB 외에 `ConnectionManager` 메모리에 `room_id: Set[WebSocket]` 형태로 활성 연결 관리.
 
 #### **Transcript (대화록)**
@@ -102,7 +102,7 @@ graph TD
   - `room_id` (UUID, FK, Index): 소속 회의실
   - `user_id` (UUID, FK): 화자
   - `content` (Text): 발언 내용
-  - `timestamp` (DateTime): 발언 시각 (Index)
+  - `timestamp` (BigInt): 발언 시각 (Unix Timestamp, ms 권장)
 - **특이사항**: 실시간성을 위해 `is_final=True` 시점에 비동기(`await session.commit()`)로 저장.
 
 #### **AiInsight (AI 중재 및 요약)**
@@ -119,9 +119,7 @@ graph TD
 
 - **SocketMessage**: WebSocket 통신을 위한 표준 JSON 포맷
 
-  Python
-
-  ```
+  ```Python
   class SocketMessage(BaseModel):
       type: str  # "transcript", "insight", "system"
       data: dict # Payload
@@ -138,7 +136,7 @@ WebSocket 연결 전/후의 상태 관리를 위한 REST API입니다.
 
 - **POST /**: 회의실 생성 (JWT 필수)
 - **GET /{room_id}**: 회의실 정보 및 입장 가능 여부 확인
-- **PATCH /{room_id}/close**: 회의 종료 (Host 전용) -> WebSocket 연결 일괄 종료 트리거.
+- **PATCH /{room_id}/close**: 회의 종료 (Host 전용) -> WebSocket 'system' 메시지 전송 후 서버 측 연결 강제 종료.
 
 ### 4.2 기록 조회 (`/api/v1/rooms/{room_id}/history`)
 
@@ -161,4 +159,3 @@ WebSocket 연결 전/후의 상태 관리를 위한 REST API입니다.
    - WebSocket 연결 시 생성된 `trace_id`를 STT 요청 및 LLM 요청 헤더/메타데이터까지 전파하여 로그 추적성 확보.
 
 ------
-
