@@ -1,6 +1,6 @@
 import pytest
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from infrastructure.external.gemini_client import GeminiClient
 
 # DNA 원칙: Mock을 활용하여 외부 비용/의존성 제거 및 빠른 피드백 확보

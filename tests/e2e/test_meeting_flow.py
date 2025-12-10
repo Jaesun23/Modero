@@ -4,15 +4,12 @@ from fastapi.testclient import TestClient
 # from main import app # app fixture를 사용하므로 이 임포트는 필요 없습니다.
 
 # 의존성 임포트 (src. 접두사 제거)
-from domain.services.audio_service import AudioService
 from infrastructure.external.google_stt import GoogleSTTClient
 from infrastructure.external.gemini_client import GeminiClient
-from core.websocket.manager import ConnectionManager
 from core.security import get_current_user_ws, TokenPayload
 
 # MeetingOrchestrator는 DI를 통해 주입되므로 여기서 직접 import 하지 않아도 됩니다.
 # 하지만 테스트에서 인스턴스를 직접 생성하기 위해 import 해야 합니다.
-from domain.services.meeting_orchestrator import MeetingOrchestrator
 
 
 @pytest.fixture
@@ -22,11 +19,19 @@ def mock_dependencies(monkeypatch):
     """
     # 1. Mock Google STT
     mock_stt = MagicMock(spec=GoogleSTTClient)
-
+    
     async def stt_transcribe_gen(stream):
-        # 스트림에서 첫 번째 chunk만 소비 (실제 STT처럼 비동기로 동작)
-        chunk = await stream.__anext__()
-
+        # CRITICAL: 실제 STT 클라이언트는 스트림을 비동기적으로 소비하면서
+        # 실시간으로 결과를 yield 합니다.
+        # 스트림을 "전부 소비한 후"에 yield하면 안 됩니다!
+        #
+        # ❌ 잘못된 방법: async for _ in stream: pass  -> 무한루프 발생!
+        # ✅ 올바른 방법: 첫 chunk만 소비하고 즉시 결과 반환
+        try:
+            chunk = await stream.__anext__() # noqa: F841
+        except StopAsyncIteration: # 스트림이 비어있으면 이 예외 발생 가능
+            pass # 오디오 스트림이 종료되었음을 의미
+        
         # 1. Interim 결과 반환
         yield {
             "text": "테스트",
@@ -41,7 +46,7 @@ def mock_dependencies(monkeypatch):
             "language_code": "ko-KR",
             "type": "final"
         }
-
+    
     mock_stt.transcribe.side_effect = stt_transcribe_gen
     
     # 2. Mock Gemini Client

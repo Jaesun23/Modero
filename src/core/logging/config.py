@@ -1,6 +1,5 @@
 # src/core/logging/config.py
 import logging
-import sys
 from typing import Any, Dict
 
 import structlog

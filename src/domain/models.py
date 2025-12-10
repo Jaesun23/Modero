@@ -10,13 +10,17 @@ from core.database import Base, TimestampMixin
 class User(Base, TimestampMixin):
     """사용자 엔티티"""
 
-    # __tablename__ = "user" (Base에서 자동 생성)
+    __tablename__ = "user"
+    # CRITICAL: 테스트 환경에서 conftest.py와 test_models.py가 동일 모델을 import할 때
+    # Base.metadata에 중복 등록 시도가 발생. extend_existing으로 허용하되,
+    # UNIQUE constraint만 사용 (index=True 제거하여 중복 index 생성 방지)
+    __table_args__ = {'extend_existing': True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     email: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
+        String(255), unique=True, nullable=False  # index=True 제거됨
     )
     nickname: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -30,6 +34,9 @@ class User(Base, TimestampMixin):
 
 class MeetingRoom(Base, TimestampMixin):
     """회의실 엔티티"""
+
+    __tablename__ = "meeting_room"
+    __table_args__ = {'extend_existing': True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -52,6 +59,9 @@ class MeetingRoom(Base, TimestampMixin):
 
 class Transcript(Base, TimestampMixin):
     """대화록 엔티티"""
+
+    __tablename__ = "transcript"
+    __table_args__ = {'extend_existing': True}
 
     # BigInt ID 사용
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -77,6 +87,9 @@ class Transcript(Base, TimestampMixin):
 
 class AiInsight(Base, TimestampMixin):
     """AI 분석 결과 엔티티"""
+
+    __tablename__ = "ai_insight"
+    __table_args__ = {'extend_existing': True}
 
     # BigInt ID 사용
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

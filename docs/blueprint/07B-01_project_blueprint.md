@@ -1,5 +1,7 @@
-# 프로젝트: AI Moderator (실시간 회의 중재 시스템)
+# 프로젝트: AI Moderator - Blueprint
 
+> 프로젝트: AI Moderator (실시간 회의 중재 시스템)
+>
 > 단계: Stage 7 - Project Blueprint
 >
 > 패밀리: B-A-A (협업/동기화)

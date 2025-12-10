@@ -4,24 +4,35 @@ from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from core.database import Base, get_session
-from api.routes.rooms import router as rooms_router
-from api.routes.websocket import router as websocket_router
+from main import app as main_app  # Application code와 동일한 import 스타일 사용
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 async def session() -> AsyncGenerator[AsyncSession, None]:
     # In-memory SQLite for testing
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    
-    # Create tables
-    async with engine.begin() as conn:
+    # 각 테스트마다 완전히 독립된 DB 생성
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        echo=False,  # SQL 로그 비활성화
+        poolclass=None,  # Connection pooling 비활성화
+    )
+
+    # 테이블 생성
+    async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     # Session factory
-    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    TestSessionLocal = async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False
+    )
 
-    async with SessionLocal() as session:
+    async with TestSessionLocal() as session:
         yield session
         await session.rollback()
+
+    # Engine 정리 (connection pool 정리)
+    await test_engine.dispose()
 
 @pytest.fixture
 async def db_session(session):
@@ -29,10 +40,8 @@ async def db_session(session):
 
 @pytest.fixture
 def app() -> FastAPI:
-    app = FastAPI()
-    app.include_router(rooms_router, prefix="/api/v1")
-    app.include_router(websocket_router)
-    return app
+    # src/main.py에 정의된 실제 앱 인스턴스를 사용
+    return main_app
 
 @pytest.fixture
 async def client(app: FastAPI, session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
@@ -44,3 +53,7 @@ async def client(app: FastAPI, session: AsyncSession) -> AsyncGenerator[AsyncCli
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
+
+    # Cleanup: 테스트 간 간섭 방지를 위해 override 제거
+    app.dependency_overrides.clear()
+

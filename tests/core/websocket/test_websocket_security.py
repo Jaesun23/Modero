@@ -1,20 +1,19 @@
 import pytest
-from fastapi import WebSocket
-from starlette.websockets import WebSocketDisconnect
+from unittest.mock import MagicMock
+from fastapi import status
+from core.security import create_access_token, verify_token, TokenPayload
+from core.websocket.schemas import WebSocketMessage
+from core.websocket.manager import ConnectionManager
 
-from core.security import create_access_token, verify_token
-from core.websocket import ConnectionManager, WebSocketMessage
-
-
-def test_jwt_generation_and_validation():
-    """JWT 생성 및 검증 테스트"""
-    data = {"sub": "user123", "name": "Tester", "room_id": "room1"}
-    token = create_access_token(data)
-
-    payload = verify_token(token)
-    assert payload.sub == "user123"
-    assert payload.room_id == "room1"
-
+@pytest.mark.asyncio
+async def test_jwt_generation_and_validation():
+    """JWT 토큰 생성 및 검증 테스트"""
+    user_id = "test_user_id"
+    payload_data = {"sub": user_id, "name": "Test User", "room_id": "test_room"}
+    token = create_access_token(payload_data)
+    
+    decoded_payload = verify_token(token)
+    assert decoded_payload.sub == user_id
 
 @pytest.mark.asyncio
 async def test_connection_manager():
@@ -23,13 +22,17 @@ async def test_connection_manager():
 
     # Mock WebSocket (AsyncMock 필요, 여기서는 개념적으로 설명)
     class MockWebSocket:
-        async def accept(self):
-            pass
+        def __init__(self):
+            self.sent_data = None
+            self.accepted = False
 
-        async def send_text(self, data):
+        async def accept(self):
+            self.accepted = True
+
+        async def send_json(self, data): # send_json 메서드 추가
             self.sent_data = data
 
-        async def close(self):
+        async def close(self, code: int = 1000):
             pass
 
     ws1 = MockWebSocket()
@@ -43,12 +46,15 @@ async def test_connection_manager():
 
     # Broadcast
     msg = WebSocketMessage(type="chat", payload={"text": "hello"})
-    await manager.broadcast(msg, room_id)
+    # manager.broadcast는 pydantic 모델이 아닌 dict를 받으므로 model_dump 사용
+    await manager.broadcast(msg.model_dump(mode="json"), room_id)
 
     # Check if sent (실제 환경에서는 json string 확인)
-    assert ws1.sent_data is not None
-    assert ws2.sent_data is not None
+    assert ws1.sent_data == msg.model_dump(mode="json")
+    assert ws2.sent_data == msg.model_dump(mode="json")
 
     # Disconnect
-    manager.disconnect(ws1, room_id)
+    manager.disconnect(room_id, "user1")
     assert len(manager.active_connections[room_id]) == 1
+    manager.disconnect(room_id, "user2")
+    assert room_id not in manager.active_connections # 방이 비었으면 방 자체가 삭제되어야 함

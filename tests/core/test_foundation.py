@@ -2,7 +2,6 @@ import os
 import pytest
 from core.config import get_settings
 from core.config.settings import Settings
-from core.logging import bind_context, get_context
 
 
 def test_settings_load(monkeypatch):

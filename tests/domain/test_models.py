@@ -1,7 +1,7 @@
 import pytest
 import uuid
 from sqlalchemy import select
-from src.domain.models import User, MeetingRoom, Transcript, AiInsight
+from domain.models import User, MeetingRoom, Transcript, AiInsight
 
 
 @pytest.mark.asyncio
