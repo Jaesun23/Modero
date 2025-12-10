@@ -1,7 +1,7 @@
 # src/core/logging/__init__.py
 import structlog
 from .config import configure_logging
-from .context import bind_context, clear_context, generate_trace_id
+from .context import bind_context, clear_context, generate_trace_id, get_context
 
 
 def get_logger(name: str | None = None) -> structlog.BoundLogger:
@@ -14,4 +14,5 @@ __all__ = [
     "bind_context",
     "clear_context",
     "generate_trace_id",
+    "get_context",
 ]

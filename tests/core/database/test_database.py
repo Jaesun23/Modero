@@ -7,7 +7,7 @@ from core.database import Base, TimestampMixin
 
 
 # 테스트용 임시 모델 정의
-class TestModel(Base, TimestampMixin):
+class ModelForTest(Base, TimestampMixin):
     __tablename__ = "test_model"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
@@ -29,7 +29,7 @@ async def test_database_session_and_model():
 
     async with TestSessionLocal() as session:
         # Create
-        new_item = TestModel(name="test_item")
+        new_item = ModelForTest(name="test_item")
         session.add(new_item)
         await session.commit()
         await session.refresh(new_item)
@@ -41,7 +41,7 @@ async def test_database_session_and_model():
 
         # Read
         result = await session.execute(
-            select(TestModel).where(TestModel.name == "test_item")
+            select(ModelForTest).where(ModelForTest.name == "test_item")
         )
         item = result.scalar_one()
         assert item.id == new_item.id
