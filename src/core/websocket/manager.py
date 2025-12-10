@@ -1,64 +1,54 @@
-# src/core/websocket/manager.py
 from collections import defaultdict
-from typing import Dict, List
-
+from typing import Dict, Any
 from fastapi import WebSocket
-
-from core.logging import get_logger, bind_context
-from .schemas import WebSocketMessage
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 class ConnectionManager:
     def __init__(self):
-        # Room ID -> List[WebSocket] 매핑
-        self.active_connections: Dict[str, List[WebSocket]] = defaultdict(list)
+        # 구조: {room_id: {user_id: WebSocket}}
+        # 딕셔너리를 사용하여 특정 사용자 연결에 O(1)로 접근 가능
+        self.active_connections: Dict[str, Dict[str, WebSocket]] = defaultdict(dict)
 
     async def connect(self, websocket: WebSocket, room_id: str, user_id: str):
         await websocket.accept()
-        self.active_connections[room_id].append(websocket)
-
-        # 로깅 컨텍스트에 연결 정보 추가
-        bind_context(room_id=room_id, user_id=user_id)
+        # 해당 방의 사용자 목록에 웹소켓 추가 (중복 접속 시 덮어쓰기 처리됨)
+        self.active_connections[room_id][user_id] = websocket
         logger.info(
-            "websocket_connected", total_in_room=len(self.active_connections[room_id])
+            "websocket_connected",
+            room_id=room_id,
+            user_id=user_id,
+            total_users=len(self.active_connections[room_id]),
         )
 
-    def disconnect(self, websocket: WebSocket, room_id: str):
+    def disconnect(self, room_id: str, user_id: str):
         if room_id in self.active_connections:
-            if websocket in self.active_connections[room_id]:
-                self.active_connections[room_id].remove(websocket)
-                logger.info(
-                    "websocket_disconnected",
-                    remaining=len(self.active_connections[room_id]),
-                )
+            if user_id in self.active_connections[room_id]:
+                del self.active_connections[room_id][user_id]
+                logger.info("websocket_disconnected", room_id=room_id, user_id=user_id)
 
-            # 방이 비었으면 메모리 정리
+            # 방에 아무도 없으면 방 키 삭제 (메모리 누수 방지)
             if not self.active_connections[room_id]:
                 del self.active_connections[room_id]
 
-    async def broadcast(self, message: WebSocketMessage, room_id: str):
-        """같은 방에 있는 모든 사용자에게 메시지 전송"""
+    async def broadcast(self, message: Dict[str, Any], room_id: str):
+        """특정 방에 있는 모든 사용자에게 메시지 전송"""
         if room_id not in self.active_connections:
             return
 
-        # 직렬화는 한 번만 수행 (성능 최적화)
-        json_msg = message.model_dump_json()
-
-        # 연결 끊긴 소켓 자동 정리 리스트
-        disconnected_sockets = []
-
-        for connection in self.active_connections[room_id]:
+        # 방 안의 모든 연결에 대해 전송
+        # 연결 끊김 에러 처리는 호출하는 쪽이나 별도 루프에서 처리 (Step 6 리팩토링 대상)
+        # 딕셔너리 변경 안전을 위해 리스트 복사본으로 순회
+        active_users = list(self.active_connections[room_id].items())
+        
+        for user_id, connection in active_users:
             try:
-                await connection.send_text(json_msg)
+                await connection.send_json(message)
             except Exception as e:
-                logger.warning("broadcast_failed", error=str(e))
-                disconnected_sockets.append(connection)
-
-        # 죽은 연결 정리
-        for dead_ws in disconnected_sockets:
-            self.disconnect(dead_ws, room_id)
+                logger.error("broadcast_failed", room_id=room_id, user_id=user_id, error=str(e))
+                self.disconnect(room_id, user_id)
 
 
 # 싱글톤 인스턴스
