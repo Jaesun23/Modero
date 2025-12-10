@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from core.database import Base, get_session
 from api.routes.rooms import router as rooms_router
+from api.routes.websocket import router as websocket_router
 
 @pytest.fixture
 async def session() -> AsyncGenerator[AsyncSession, None]:
@@ -30,6 +31,7 @@ async def db_session(session):
 def app() -> FastAPI:
     app = FastAPI()
     app.include_router(rooms_router, prefix="/api/v1")
+    app.include_router(websocket_router)
     return app
 
 @pytest.fixture

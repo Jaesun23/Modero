@@ -22,7 +22,7 @@ def configure_logging() -> None:
     settings = get_settings()
 
     # 공통 프로세서
-    processors = [
+    processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         add_context,
         structlog.processors.add_log_level,
