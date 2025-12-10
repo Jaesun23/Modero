@@ -1,18 +1,14 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
-from main import app # app fixture를 사용하므로 이 임포트는 필요 없습니다.
 
 # 의존성 임포트 (src. 접두사 제거)
-from domain.services.audio_service import AudioService
 from infrastructure.external.google_stt import GoogleSTTClient
 from infrastructure.external.gemini_client import GeminiClient
-from core.websocket.manager import ConnectionManager
 from core.security import get_current_user_ws, TokenPayload
 
 # MeetingOrchestrator는 DI를 통해 주입되므로 여기서 직접 import 하지 않아도 됩니다.
 # 하지만 테스트에서 인스턴스를 직접 생성하기 위해 import 해야 합니다.
-from domain.services.meeting_orchestrator import MeetingOrchestrator
 
 
 @pytest.fixture

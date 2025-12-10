@@ -1,8 +1,9 @@
 # src/core/config/settings.py
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
+from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, Field, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +14,6 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     # 보안 설정 (필수값)
-    # .env 파일에 없으면 서버 실행 시 에러 발생
     gemini_api_key: SecretStr
     jwt_secret_key: SecretStr
 
@@ -21,14 +21,25 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Database (기본값은 로컬 파일 기반 SQLite)
+    # Database
     database_url: str = "sqlite+aiosqlite:///./app.db"
+
+    # [DNA Fix] Google Cloud 인증 파일 경로 (MEDIUM-003)
+    google_application_credentials: Optional[Path] = Field(
+        default=None, description="Google Cloud 인증 JSON 파일 경로"
+    )
+
+    @validator("google_application_credentials")
+    def validate_google_credentials(cls, v):
+        if v and not v.exists():
+            raise ValueError(f"Google credentials file not found: {v}")
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",  # 정의되지 않은 환경변수는 무시
+        extra="ignore",
     )
 
 

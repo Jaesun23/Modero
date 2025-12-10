@@ -65,7 +65,9 @@ async def test_transcript_creation(session):
     session.add(room)
     await session.commit()
 
+    # SQLite는 BigInteger autoincrement를 지원하지 않으므로 명시적으로 ID 제공
     transcript = Transcript(
+        id=1,
         room_id=room.id,
         user_id=user.id,
         content="Hello, World!",
@@ -77,7 +79,7 @@ async def test_transcript_creation(session):
     await session.commit()
 
     # Then
-    assert transcript.id is not None
+    assert transcript.id == 1
     assert transcript.content == "Hello, World!"
     assert transcript.created_at is not None  # Mixin check
 
@@ -94,7 +96,9 @@ async def test_ai_insight_creation(session):
     session.add(room)
     await session.commit()
 
+    # SQLite는 BigInteger autoincrement를 지원하지 않으므로 명시적으로 ID 제공
     insight = AiInsight(
+        id=1,
         room_id=room.id,
         type="summary",
         content="This meeting was about DNA methodology.",
@@ -105,5 +109,5 @@ async def test_ai_insight_creation(session):
     await session.commit()
 
     # Then
-    assert insight.id is not None
+    assert insight.id == 1
     assert insight.type == "summary"

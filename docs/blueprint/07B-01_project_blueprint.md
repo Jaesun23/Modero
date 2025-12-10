@@ -64,7 +64,7 @@ graph TD
      - *최적화*: `is_final=False`인 중간 결과는 UI 표시용으로 즉시 브로드캐스팅, `is_final=True`인 결과만 DB 저장 및 LLM 입력으로 사용.
    - **LLM (Gemini)**:
      - Trace ID를 유지하며 STT 결과를 프롬프트 템플릿에 주입.
-     - **[Update] Unary Async Processing**: 실시간 대화의 맥락 파악을 위해 스트리밍 대신 `generate_content_async`를 사용하여 문장 단위로 완결된 JSON 응답을 수신 (비동기 처리로 Latency 최소화).
+     - **[Update] Unary Async Processing**: 실시간 스트리밍 대신 `generate_content_async`를 사용하여 문장 단위로 완결된 JSON 응답을 수신 (비동기 처리로 Latency 최소화).
 3. **Broadcasting (전파)**
    - 생성된 `Transcript`와 `AiInsight`를 `ConnectionManager.broadcast(room_id, message)`를 통해 방에 있는 모든 클라이언트에게 전송.
 
@@ -97,20 +97,20 @@ graph TD
 
 #### **Transcript (대화록)**
 
-- **식별자**: `id` (BigInt, AutoInc) - *삽입 성능 최적화*
+- **식별자**: `id` (BigInt, AutoInc) - *삽입 성능 및 대량 데이터 대응*
 - **필드**:
   - `room_id` (UUID, FK, Index): 소속 회의실
   - `user_id` (UUID, FK): 화자
   - `content` (Text): 발언 내용
-  - `timestamp` (BigInt): 발언 시각 (Unix Timestamp, ms 권장)
+  - `timestamp` (BigInt): 발언 시각 (Unix Timestamp, ms 단위 권장) - *검색 및 정렬 최적화*
 - **특이사항**: 실시간성을 위해 `is_final=True` 시점에 비동기(`await session.commit()`)로 저장.
 
 #### **AiInsight (AI 중재 및 요약)**
 
-- **식별자**: `id` (BigInt)
+- **식별자**: `id` (BigInt, AutoInc)
 - **필드**:
   - `room_id` (UUID, FK)
-  - `type` (Enum): `SUMMARY`(요약), `WARNING`(발언권 독점 경고), `SUGGESTION`(주제 제안)
+  - `type` (Enum): `SUMMARY`(요약), `WARNING`(발언권 독점 경고), `SUGGESTION`(주제 제안) - *엄격한 타입 관리*
   - `content` (Text): AI 메시지 본문
   - `created_at` (DateTime)
   - `ref_transcript_id` (BigInt, FK, Nullable): 특정 발언에 대한 반응일 경우 참조.
@@ -122,8 +122,8 @@ graph TD
   ```Python
   class SocketMessage(BaseModel):
       type: str  # "transcript", "insight", "system"
-      data: dict # Payload
-      timestamp: float
+      payload: Any # Payload (Schema updated to match implementation)
+      timestamp: datetime # ISO Format string
   ```
 
 ------
@@ -140,8 +140,8 @@ WebSocket 연결 전/후의 상태 관리를 위한 REST API입니다.
 
 ### 4.2 기록 조회 (`/api/v1/rooms/{room_id}/history`)
 
-- **GET /transcripts**: 지난 대화록 페이징 조회 (Cursor-based Pagination 권장).
-- **GET /insights**: AI 중재 이력 조회.
+- **GET /transcripts**: 지난 대화록 페이징 조회 (Cursor-based Pagination).
+- **GET /insights**: AI 중재 이력 페이징 조회.
 
 ------
 
@@ -153,7 +153,7 @@ WebSocket 연결 전/후의 상태 관리를 위한 REST API입니다.
 2. **도메인 분리**:
    - `src/domain/speech` (STT 처리)
    - `src/domain/insight` (Gemini 처리)
-   - `src/domain/room` (회의실 관리)
+   - `src/domain/room` (회의실 관리 - Service Layer 도입)
    - 도메인 간 의존성은 `Service` 레이어에서 주입받아 처리.
 3. **Traceability**:
    - WebSocket 연결 시 생성된 `trace_id`를 STT 요청 및 LLM 요청 헤더/메타데이터까지 전파하여 로그 추적성 확보.

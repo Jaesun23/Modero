@@ -1,7 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
-from fastapi import status
-from core.security import create_access_token, verify_token, TokenPayload
+from core.security import create_access_token, verify_token
 from core.websocket.schemas import WebSocketMessage
 from core.websocket.manager import ConnectionManager
 

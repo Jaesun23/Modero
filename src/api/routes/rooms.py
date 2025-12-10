@@ -1,14 +1,13 @@
 import uuid
-from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from core.database import get_session
-from domain.models import MeetingRoom
+from domain.services.room_service import room_service
 from api.schemas.rooms import CreateRoomRequest, RoomResponse
 from core.security import get_current_user, TokenPayload
-from core.websocket.manager import manager  # [DNA Fix] 소켓 매니저 임포트
+from core.websocket.manager import manager
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -21,39 +20,20 @@ async def create_room(
 ):
     """새로운 회의실을 생성합니다."""
     try:
-        # 토큰의 sub(Subject)를 UUID로 변환하여 Host ID로 사용
         host_id = uuid.UUID(current_user.sub)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user ID format in token",
-        )
+        raise HTTPException(status_code=400, detail="Invalid user ID")
 
-    new_room = MeetingRoom(
-        title=request.title,
-        host_id=host_id,
-        is_active=True,
-    )
-
-    db.add(new_room)
-    await db.commit()
-    await db.refresh(new_room)
-
-    return new_room
+    room = await room_service.create_room(db, request.title, host_id)
+    return room
 
 
 @router.get("/{room_id}", response_model=RoomResponse)
 async def get_room(room_id: uuid.UUID, db: AsyncSession = Depends(get_session)):
     """회의실 정보를 조회합니다."""
-    stmt = select(MeetingRoom).where(MeetingRoom.id == room_id)
-    result = await db.execute(stmt)
-    room = result.scalar_one_or_none()
-
+    room = await room_service.get_room(db, room_id)
     if not room:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Room not found"
-        )
-
+        raise HTTPException(status_code=404, detail="Room not found")
     return room
 
 
@@ -64,48 +44,40 @@ async def close_room(
     db: AsyncSession = Depends(get_session),
 ):
     """
-    [DNA Fix] 회의를 종료하고 모든 참여자의 WebSocket 연결을 끊습니다.
-    오직 방장(Host)만 실행할 수 있습니다.
+    [DNA Fix] CRITICAL-001: 회의 종료 및 웹소켓 연결 해제
     """
-    # 1. 회의실 조회
-    stmt = select(MeetingRoom).where(MeetingRoom.id == room_id)
-    result = await db.execute(stmt)
-    room = result.scalar_one_or_none()
+    try:
+        # DB 상태 업데이트 (Service 위임)
+        await room_service.close_room(db, room_id, current_user.sub)
 
-    if not room:
+        # WebSocket 강제 종료 (Manager 위임)
+        await manager.disconnect_room(str(room_id))
+
+        return {"message": "Meeting closed successfully"}
+
+    except ValueError:
         raise HTTPException(status_code=404, detail="Room not found")
-
-    # 2. 권한 체크 (방장 여부)
-    if str(room.host_id) != current_user.sub:
+    except PermissionError:
         raise HTTPException(status_code=403, detail="Only host can close the meeting")
 
-    # 3. DB 상태 업데이트
-    if room.is_active:
-        room.is_active = False
-        await db.commit()
 
-    # 4. WebSocket 강제 종료 브로드캐스트
-    room_id_str = str(room_id)
-    close_message = {
-        "type": "system",
-        "payload": {
-            "event": "meeting_closed",
-            "message": "The host has closed the meeting.",
-        },
-    }
+@router.get("/{room_id}/history/transcripts")
+async def get_transcripts_history(
+    room_id: uuid.UUID,
+    cursor: Optional[int] = Query(None, description="Last seen ID for pagination"),
+    limit: int = Query(50, le=100),
+    db: AsyncSession = Depends(get_session),
+):
+    """[DNA Fix] HIGH-001: 대화록 페이징 조회"""
+    return await room_service.get_transcripts_history(db, room_id, cursor, limit)
 
-    # 먼저 종료 메시지 전송
-    await manager.broadcast(close_message, room_id_str)
 
-    # 해당 방의 모든 연결 강제 해제 (서버 측 close)
-    # 딕셔너리 변경 방지를 위해 리스트로 복사
-    active_users = list(manager.active_connections[room_id_str].items())
-    for user_id, ws in active_users:
-        try:
-            await ws.close(code=status.WS_1000_NORMAL_CLOSURE)
-        except Exception:
-            pass  # 이미 닫힌 경우 무시
-        finally:
-            manager.disconnect(room_id_str, user_id)
-
-    return {"message": "Meeting closed successfully"}
+@router.get("/{room_id}/history/insights")
+async def get_insights_history(
+    room_id: uuid.UUID,
+    cursor: Optional[int] = Query(None, description="Last seen ID for pagination"),
+    limit: int = Query(20, le=50),
+    db: AsyncSession = Depends(get_session),
+):
+    """[DNA Fix] HIGH-001: AI 인사이트 페이징 조회"""
+    return await room_service.get_insights_history(db, room_id, cursor, limit)
