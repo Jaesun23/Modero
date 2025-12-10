@@ -1,117 +1,106 @@
 import pytest
-import uuid
-from httpx import AsyncClient
-from unittest.mock import AsyncMock, MagicMock
-from fastapi import WebSocket
-import asyncio
+from unittest.mock import MagicMock, AsyncMock
+from fastapi.testclient import TestClient
+# from main import app # app fixture를 사용하므로 이 임포트는 필요 없습니다.
 
-from core.security import get_current_user_ws, TokenPayload
-from api.dependencies import (
-    get_audio_service,
-    get_stt_client,
-    get_gemini_client,
-    get_connection_manager,
-    get_meeting_orchestrator,
-)
+# 의존성 임포트 (src. 접두사 제거)
 from domain.services.audio_service import AudioService
 from infrastructure.external.google_stt import GoogleSTTClient
 from infrastructure.external.gemini_client import GeminiClient
 from core.websocket.manager import ConnectionManager
-from domain.services.meeting_orchestrator import MeetingOrchestrator # ADDED
-from fastapi.testclient import TestClient # For websocket_connect
+from core.security import get_current_user_ws, TokenPayload
 
-@pytest.mark.asyncio
-async def test_e2e_websocket_pipeline_flow(app, mocker):
+# MeetingOrchestrator는 DI를 통해 주입되므로 여기서 직접 import 하지 않아도 됩니다.
+# 하지만 테스트에서 인스턴스를 직접 생성하기 위해 import 해야 합니다.
+from domain.services.meeting_orchestrator import MeetingOrchestrator
+
+
+@pytest.fixture
+def mock_dependencies(monkeypatch):
     """
-    E2E 테스트: WebSocket을 통해 오디오 데이터를 보내고 STT/Gemini 결과가
-    정상적으로 브로드캐스트되는지 확인합니다.
+    Orchestrator가 사용하는 외부 의존성을 Mocking합니다.
     """
-    # --- Setup Mocks and Overrides ---
-    mock_audio_service = mocker.MagicMock(spec=AudioService)
-    mock_stt_client = mocker.MagicMock(spec=GoogleSTTClient)
-    mock_gemini_client = mocker.MagicMock(spec=GeminiClient)
-    mock_manager = mocker.MagicMock(spec=ConnectionManager)
+    # 1. Mock Google STT
+    mock_stt = MagicMock(spec=GoogleSTTClient)
 
-    # AudioService.get_audio_stream을 모킹하여 오케스트레이터가 소비할 스트림을 제어
-    async def mock_audio_stream_for_orchestrator():
-        # 오케스트레이터에게 전달될 가상의 오디오 청크
-        yield b"simulated_audio_chunk_for_orchestrator"
-        yield None # 오케스트레이터의 스트림 종료 신호
-    mock_audio_service.get_audio_stream.return_value = mock_audio_stream_for_orchestrator()
+    async def stt_transcribe_gen(stream):
+        # 스트림에서 첫 번째 chunk만 소비 (실제 STT처럼 비동기로 동작)
+        chunk = await stream.__anext__()
 
-    # Mock STT transcribe to yield one final result
-    async def mock_stt_transcribe_generator(audio_stream):
-        async for chunk in audio_stream:
-            if chunk is None:
-                break
-            # 첫 번째 청크 이후에 Final STT 결과 yield
-            yield {"text": "hello final", "is_final": True, "type": "final"}
-            break # Consume one chunk and then return final, for simple test
+        # 1. Interim 결과 반환
+        yield {
+            "text": "테스트",
+            "is_final": False,
+            "language_code": "ko-KR",
+            "type": "interim"
+        }
+        # 2. Final 결과 반환 (이때 Gemini가 호출되어야 함)
+        yield {
+            "text": "테스트 문장입니다.",
+            "is_final": True,
+            "language_code": "ko-KR",
+            "type": "final"
+        }
 
-    mock_stt_client.transcribe.side_effect = mock_stt_transcribe_generator
-
-    # Mock Gemini generate_insight
-    mock_gemini_client.generate_insight.return_value = {
-        "type": "SUMMARY", "content": "mocked insight"
+    mock_stt.transcribe.side_effect = stt_transcribe_gen
+    
+    # 2. Mock Gemini Client
+    mock_gemini = AsyncMock(spec=GeminiClient)
+    mock_gemini.generate_insight.return_value = {
+        "type": "SUMMARY",
+        "content": "이것은 테스트 요약입니다."
     }
 
-    # Override dependencies
-    app.dependency_overrides[get_audio_service] = lambda: mock_audio_service
-    app.dependency_overrides[get_stt_client] = lambda: mock_stt_client
-    app.dependency_overrides[get_gemini_client] = lambda: mock_gemini_client
-    app.dependency_overrides[get_connection_manager] = lambda: mock_manager
-    app.dependency_overrides[get_meeting_orchestrator] = lambda: MeetingOrchestrator(
-        audio_service=mock_audio_service,
-        stt_client=mock_stt_client,
-        gemini_client=mock_gemini_client,
-        manager=mock_manager,
-    )
-
-
-    # Mock get_current_user_ws for authentication
-    async def mock_get_current_user_ws():
-        return TokenPayload(sub="test_user_e2e", name="E2E User", room_id="test_room_e2e", exp=9999999999)
-    app.dependency_overrides[get_current_user_ws] = mock_get_current_user_ws
-
-    room_id = "test_room_e2e"
-    user_id = "test_user_e2e"
+    # 3. 의존성 주입 (Orchestrator가 내부적으로 생성하는 객체들을 가로채기 위해)
+    # src.api.routes.websocket에서 GoogleSTTClient와 GeminiClient를 직접 임포트하므로
+    # 해당 경로의 클래스들을 monkeypatch로 교체합니다.
+    # 클래스 자체를 Mock으로 교체해야 인스턴스 생성 시 Mock이 반환됩니다.
+    monkeypatch.setattr("api.routes.websocket.GoogleSTTClient", MagicMock(return_value=mock_stt))
+    monkeypatch.setattr("api.routes.websocket.GeminiClient", MagicMock(return_value=mock_gemini))
     
-    # --- Test Flow ---
+    return mock_stt, mock_gemini
+
+def test_websocket_e2e_flow(mock_dependencies, app): # app fixture 추가
+    """
+    WebSocket 연결 -> 오디오 전송 -> STT 결과 수신 -> Gemini 결과 수신
+    전체 파이프라인을 검증합니다.
+    """
+    mock_stt, mock_gemini = mock_dependencies
+    
+    room_id = "test_room_e2e"
+    
+    # 토큰 검증 의존성 오버라이드
+    app.dependency_overrides[get_current_user_ws] = lambda: TokenPayload(sub="test_user", name="Test User", exp=9999999999)
+
     with TestClient(app) as client:
-        with client.websocket_connect(f"/ws/audio/{room_id}?token=fake_token") as websocket:
-            # 1. Simulate sending audio data
-            # 이 데이터는 websocket_endpoint를 통해 mock_audio_service.push_audio로 전달됨
-            audio_data_from_client = b"client_audio_chunk"
-            websocket.send_bytes(audio_data_from_client)
+        # token 파라미터를 넘겨주지 않으면 get_current_user_ws가 에러 발생.
+        # dummy token이라도 넘겨줘야 함.
+        with client.websocket_connect(f"/ws/audio/{room_id}?token=dummy_token") as websocket:
+            # 1. 오디오 데이터 전송 (바이너리)
+            # 이 데이터는 AudioService 큐로 들어가고 -> Orchestrator가 소비 -> Mock STT로 전달됨
+            websocket.send_bytes(b"dummy_audio_data")
+            
+            # 2. STT Interim 결과 수신 대기
+            data_1 = websocket.receive_json()
+            assert data_1["type"] == "stt_result"
+            assert data_1["payload"]["text"] == "테스트"
+            assert data_1["payload"]["is_final"] is False
+            
+            # 3. STT Final 결과 수신 대기
+            data_2 = websocket.receive_json()
+            assert data_2["type"] == "stt_result"
+            assert data_2["payload"]["text"] == "테스트 문장입니다."
+            assert data_2["payload"]["is_final"] is True
+            
+            # 4. Gemini Insight 결과 수신 대기 (Final 이후 자동으로 트리거됨)
+            data_3 = websocket.receive_json()
+            assert data_3["type"] == "ai_response"
+            assert data_3["payload"]["type"] == "SUMMARY"
+            assert data_3["payload"]["content"] == "이것은 테스트 요약입니다."
+            
+            # 5. 연결 종료
+            websocket.close()
 
-            # 오케스트레이터가 오디오를 소비하고, STT, Gemini 처리 후 브로드캐스트할 시간을 줌
-            await asyncio.sleep(0.5) # 충분한 시간 부여 (STT, Gemini 모킹 지연 고려)
-
-            # 2. Verify audio service received push from endpoint
-            mock_audio_service.push_audio.assert_called_once_with(user_id, audio_data_from_client)
-            
-            # 3. Verify audio_service.get_audio_stream was called by orchestrator
-            mock_audio_service.get_audio_stream.assert_called_once_with(user_id)
-            
-            # 4. Verify STT client transcribe was called
-            mock_stt_client.transcribe.assert_called_once()
-            
-            # 5. Verify Gemini client was called (because STT result was final)
-            mock_gemini_client.generate_insight.assert_called_once_with("hello final")
-
-            # 6. Verify manager broadcast was called for STT and Gemini results
-            # Note: broadcast is called twice, once for STT, once for Gemini
-            assert mock_manager.broadcast.call_count == 2
-            
-            # Additional assertions for broadcast content
-            # (requires exact dict match, can be complex with timestamp)
-            # You can check call args if needed.
-            
-            # Ensure orchestrator task is done (stream finished)
-            # The process_task will be cancelled on WebSocketDisconnect or finish when stream ends.
-            # Here it should finish as audio_stream_for_orchestrator yields None.
-            
-    # --- Cleanup ---
-    # Dependency overrides should be automatically cleaned up by pytest,
-    # but explicit cleanup ensures isolation.
-    app.dependency_overrides = {}
+    # 검증: Mock 객체들이 실제로 호출되었는지 확인
+    assert mock_gemini.generate_insight.called
+    assert mock_gemini.generate_insight.call_args[0][0] == "테스트 문장입니다."
